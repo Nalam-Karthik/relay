@@ -1,0 +1,86 @@
+# Relay gateway configuration.
+# Works out of the box with mock providers; real upstreams switch on when their
+# API key env var is set (see README).
+
+providers:
+  mock-primary:
+    type: mock
+    latency_ms: 40
+    failure_rate: 0.15        # flaky on purpose, to exercise retries/fallback
+  mock-backup:
+    type: mock
+    latency_ms: 80
+  anthropic:
+    type: anthropic
+    api_key_env: ANTHROPIC_API_KEY
+  openai:
+    type: openai
+    api_key_env: OPENAI_API_KEY
+  local:                      # any OpenAI-compatible server, e.g. Ollama
+    type: openai
+    base_url: http://localhost:11434/v1
+
+# Route aliases -> ordered fallback chains. Clients can also address a
+# provider directly as "<provider>/<model>".
+routes:
+  default:
+    targets:
+      - { provider: mock-primary, model: mock-large }
+      - { provider: mock-backup,  model: mock-small }
+  claude:
+    targets:
+      - { provider: anthropic,   model: claude-sonnet-5-5 }
+      - { provider: anthropic,   model: claude-haiku-5-5 }
+      - { provider: mock-backup, model: mock-small }
+  local:
+    targets:
+      - { provider: local,       model: llama3.2 }
+      - { provider: mock-backup, model: mock-small }
+
+# USD per million tokens. Keys are "<provider>/<model>" or "<model>".
+# The real-model figures are placeholders: copy current rates from each
+# provider's pricing page before relying on cost reports.
+pricing:
+  mock-large:        { input_per_mtok: 3.0,  output_per_mtok: 15.0 }
+  mock-small:        { input_per_mtok: 1.0,  output_per_mtok: 5.0 }
+  claude-sonnet-5-5: { input_per_mtok: 3.0,  output_per_mtok: 15.0 }
+  claude-haiku-5-5:  { input_per_mtok: 1.0,  output_per_mtok: 5.0 }
+
+tenants:
+  - name: acme
+    api_key: relay-dev-acme
+    requests_per_minute: 600
+    tokens_per_minute: 200000
+    monthly_budget_usd: 50
+    admin: true
+  - name: free-tier
+    api_key: relay-dev-free
+    requests_per_minute: 10
+    tokens_per_minute: 5000
+    monthly_budget_usd: 1
+    allowed_models: [default]
+  - name: bench               # high limits for scripts/loadtest.py
+    api_key: relay-dev-bench
+    requests_per_minute: 1000000
+    tokens_per_minute: 100000000
+
+cache:
+  enabled: true
+  ttl_s: 3600
+  max_entries: 5000
+  semantic_enabled: true
+  similarity_threshold: 0.9
+  embedder:
+    type: hashing             # or: openai (with base_url / model / api_key_env)
+
+resilience:
+  max_retries: 2
+  backoff_base_ms: 100
+  backoff_max_ms: 2000
+  breaker_failure_threshold: 5
+  breaker_reset_s: 30
+
+guardrails:
+  redact_pii: true
+
+db_path: relay.db
